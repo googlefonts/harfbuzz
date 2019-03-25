@@ -9,6 +9,8 @@
 
 This is HarfBuzz, a text shaping library.
 
+Hello.
+
 For bug reports, mailing list, and other information please visit:
 
   http://harfbuzz.org/
