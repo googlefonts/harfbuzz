@@ -173,20 +173,18 @@ struct name
 
   template <typename Iterator,
 	    hb_requires (hb_is_source_of (Iterator, const NameRecord &))>
-  bool serialize (hb_serialize_context_t *c,
+  void serialize (hb_serialize_context_t *c,
 		  Iterator it,
 		  const void *src_string_pool)
   {
-    TRACE_SERIALIZE (this);
-
-    if (unlikely (!c->extend_min ((*this))))  return_trace (false);
+    if (unlikely (!c->extend_min ((*this))))  return;
 
     this->format = 0;
     this->count = it.len ();
 
     auto snap = c->snapshot ();
     this->nameRecordZ.serialize (c, this->count);
-    if (unlikely (!c->check_assign (this->stringOffset, c->length ()))) return_trace (false);
+    if (unlikely (!c->check_assign (this->stringOffset, c->length ()))) return;
     c->revert (snap);
 
     const void *dst_string_pool = &(this + this->stringOffset);
@@ -194,12 +192,6 @@ struct name
     + it
     | hb_apply ([=] (const NameRecord& _) { c->copy (_, src_string_pool, dst_string_pool); })
     ;
-
-    if (unlikely (c->ran_out_of_room)) return_trace (false);
-
-    assert (this->stringOffset == c->length ());
-
-    return_trace (true);
   }
 
   bool subset (hb_subset_context_t *c) const
@@ -214,8 +206,10 @@ struct name
     | hb_filter (c->plan->name_ids, &NameRecord::nameID)
     ;
 
+    bool ret = bool (it);
+
     name_prime->serialize (c->serializer, it, hb_addressof (this + stringOffset));
-    return_trace (name_prime->count);
+    return_trace (ret);
   }
 
   bool sanitize_records (hb_sanitize_context_t *c) const

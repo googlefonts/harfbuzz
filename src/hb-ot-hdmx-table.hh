@@ -46,13 +46,11 @@ struct DeviceRecord
 
   template<typename Iterator,
 	   hb_requires (hb_is_iterator (Iterator))>
-  bool serialize (hb_serialize_context_t *c, unsigned pixelSize, Iterator it)
+  void serialize (hb_serialize_context_t *c, unsigned pixelSize, Iterator it)
   {
-    TRACE_SERIALIZE (this);
-
     unsigned length = it.len ();
 
-    if (unlikely (!c->extend (*this, length)))  return_trace (false);
+    if (unlikely (!c->extend (*this, length)))  return;
 
     this->pixelSize = pixelSize;
     this->maxWidth =
@@ -61,8 +59,6 @@ struct DeviceRecord
 
     + it
     | hb_sink (widthsZ.as_array (length));
-
-    return_trace (true);
   }
 
   bool sanitize (hb_sanitize_context_t *c, unsigned sizeDeviceRecord) const
@@ -97,11 +93,9 @@ struct hdmx
 
   template<typename Iterator,
 	   hb_requires (hb_is_iterator (Iterator))>
-  bool serialize (hb_serialize_context_t *c, unsigned version, Iterator it)
+  void serialize (hb_serialize_context_t *c, unsigned version, Iterator it)
   {
-    TRACE_SERIALIZE (this);
-
-    if (unlikely (!c->extend_min ((*this))))  return_trace (false);
+    if (unlikely (!c->extend_min ((*this))))  return;
 
     this->version = version;
     this->numRecords = it.len ();
@@ -112,8 +106,6 @@ struct hdmx
 		  c->start_embed<DeviceRecord> ()->serialize (c, _.first, _.second);
 		})
     ;
-
-    return_trace (c->successful);
   }
 
 

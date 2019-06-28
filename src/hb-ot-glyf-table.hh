@@ -133,17 +133,13 @@ struct glyf
 
   // requires source of SubsetGlyph complains the identifier isn't declared
   template <typename Iterator>
-  bool serialize(hb_serialize_context_t *c,
+  void serialize(hb_serialize_context_t *c,
 		 Iterator it,
 		 const hb_subset_plan_t *plan)
   {
-    TRACE_SERIALIZE (this);
-
     + it
     | hb_apply ([=] (const SubsetGlyph& _) { _.serialize (c, plan); })
     ;
-
-    return_trace (true);
   }
 
   bool subset (hb_subset_context_t *c) const
@@ -635,11 +631,9 @@ struct glyf
     hb_bytes_t dest_end;    // region of source_glyph to copy second
 
 
-  bool serialize (hb_serialize_context_t *c,
+  void serialize (hb_serialize_context_t *c,
 		  const hb_subset_plan_t *plan) const
   {
-    TRACE_SERIALIZE (this);
-
     hb_bytes_t dest_glyph = dest_start.copy(c);
     dest_glyph = hb_bytes_t (&dest_glyph, dest_glyph.length + dest_end.copy(c).length);
     unsigned int pad_length = padding ();
@@ -662,8 +656,6 @@ struct glyf
 	c->check_success (_remove_composite_instruction_flag (dest_glyph));
       }
     }
-
-    return_trace (true);
   }
 
     void drop_hints (const OT::glyf::accelerator_t& glyf)
