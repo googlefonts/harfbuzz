@@ -1236,7 +1236,8 @@ struct ClassDefFormat1
     return_trace (true);
   }
 
-  bool subset (hb_subset_context_t *c) const
+  bool subset (hb_subset_context_t *c,
+               hb_set_t *klass_set = nullptr /*INOUT*/) const
   {
     TRACE_SUBSET (this);
     const hb_set_t &glyphset = *c->plan->glyphset ();
@@ -1246,6 +1247,7 @@ struct ClassDefFormat1
 
     hb_codepoint_t start = startGlyph;
     hb_codepoint_t end   = start + classValue.len;
+
     for (hb_codepoint_t g = start; g < end; g++)
     {
       if (!glyphset.has (g)) continue;
@@ -1253,7 +1255,20 @@ struct ClassDefFormat1
       if (!value) continue;
       glyphs.push(glyph_map[g]);
       klasses.push(value);
+      if (klass_set != nullptr) klass_set->add (value);
     }
+
+    if (klass_set != nullptr)
+    {
+      bool no_match =
+      + hb_iter (glyphset)
+      | hb_filter ([&] (hb_codepoint_t _) { return _ >= end || _ < start;})
+      | hb_any
+      ;
+  
+      if (no_match) klass_set->add (0);
+    }
+
     c->serializer->propagate_error (glyphs, klasses);
     ClassDef_serialize (c->serializer, glyphs, klasses);
     return_trace ((bool) glyphs);
@@ -1385,7 +1400,8 @@ struct ClassDefFormat2
     return_trace (true);
   }
 
-  bool subset (hb_subset_context_t *c) const
+  bool subset (hb_subset_context_t *c,
+               hb_set_t *klass_set = nullptr /*OUT*/) const
   {
     TRACE_SUBSET (this);
     const hb_set_t &glyphset = *c->plan->glyphset ();
@@ -1405,8 +1421,21 @@ struct ClassDefFormat2
 	if (!glyphset.has (g)) continue;
 	glyphs.push (glyph_map[g]);
 	klasses.push (value);
+        if (klass_set != nullptr) klass_set->add (value);
       }
     }
+
+    if (klass_set != nullptr)
+    {
+      bool no_match =
+      + hb_iter (glyphset)
+      | hb_filter ([&] (hb_codepoint_t _) { return !glyphs.find (_); })
+      | hb_any
+      ;
+  
+      if (no_match) klass_set->add (0);
+    }
+
     c->serializer->propagate_error (glyphs, klasses);
     ClassDef_serialize (c->serializer, glyphs, klasses);
     return_trace ((bool) glyphs);
@@ -1538,12 +1567,13 @@ struct ClassDef
     }
   }
 
-  bool subset (hb_subset_context_t *c) const
+  bool subset (hb_subset_context_t *c,
+               hb_set_t *klass_set = nullptr /*INOUT*/) const
   {
     TRACE_SUBSET (this);
     switch (u.format) {
-    case 1: return_trace (u.format1.subset (c));
-    case 2: return_trace (u.format2.subset (c));
+    case 1: return_trace (u.format1.subset (c, klass_set));
+    case 2: return_trace (u.format2.subset (c, klass_set));
     default:return_trace (false);
     }
   }
