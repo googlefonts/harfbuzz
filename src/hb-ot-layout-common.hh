@@ -66,6 +66,10 @@ namespace OT {
 
 #define NOT_COVERED		((unsigned int) -1)
 
+template<typename Iterator>
+static inline void Coverage_serialize (hb_serialize_context_t *c,
+				       Iterator it);
+
 
 /*
  *
@@ -815,6 +819,23 @@ struct CoverageFormat1
     return_trace (glyphArray.serialize (c, glyphs));
   }
 
+  bool subset (hb_subset_context_t *c) const
+  {
+    TRACE_SUBSET (this);
+    const hb_set_t &glyphset = *c->plan->glyphset ();
+    const hb_map_t &glyph_map = *c->plan->glyph_map;
+
+    auto it =
+    + glyphArray.iter ()
+    | hb_filter (glyphset)
+    | hb_map_retains_sorting (glyph_map)
+    ;
+
+    bool ret = bool (it);
+    Coverage_serialize (c->serializer, it);
+    return_trace (ret);
+  }
+
   bool sanitize (hb_sanitize_context_t *c) const
   {
     TRACE_SANITIZE (this);
@@ -919,6 +940,35 @@ struct CoverageFormat2
     }
 
     return_trace (true);
+  }
+
+  bool subset (hb_subset_context_t *c) const
+  {
+    TRACE_SUBSET (this);
+    const hb_set_t &glyphset = *c->plan->glyphset ();
+    const hb_map_t &glyph_map = *c->plan->glyph_map;
+
+    hb_sorted_vector_t<hb_codepoint_t> glyphs;
+
+    for (const RangeRecord& record : rangeRecord)
+    {
+      hb_codepoint_t start = record.start;
+      hb_codepoint_t end = record.end;
+
+      + hb_range (start, end+1)
+      | hb_sink (glyphs)
+      ;
+    }
+
+    auto it =
+    + hb_iter (glyphs)
+    | hb_filter (glyphset)
+    | hb_map_retains_sorting (glyph_map)
+    ;
+
+    bool ret = bool (it);
+    Coverage_serialize (c->serializer, it);
+    return_trace (ret);
   }
 
   bool sanitize (hb_sanitize_context_t *c) const
@@ -1073,6 +1123,17 @@ struct Coverage
     }
   }
 
+  bool subset (hb_subset_context_t *c) const
+  {
+    TRACE_SUBSET (this);
+    switch (u.format)
+    {
+    case 1: return_trace (u.format1.subset (c));
+    case 2: return_trace (u.format2.subset (c));
+    default:return_trace (false);
+    }
+  }
+
   bool sanitize (hb_sanitize_context_t *c) const
   {
     TRACE_SANITIZE (this);
@@ -1191,14 +1252,20 @@ struct Coverage
   DEFINE_SIZE_UNION (2, format);
 };
 
+template<typename Iterator>
+static inline void
+Coverage_serialize (hb_serialize_context_t *c,
+                    Iterator it)
+{ c->start_embed<Coverage> ()->serialize (c, it); }
 
 /*
  * Class Definition Table
  */
 
 static inline void ClassDef_serialize (hb_serialize_context_t *c,
-				       hb_array_t<const HBGlyphID> glyphs,
-				       hb_array_t<const HBUINT16> klasses);
+				       hb_sorted_array_t<const HBGlyphID> glyphs,
+				       const hb_map_t *gid_org_klass_map,
+                                       const hb_map_t *klass_map);
 
 struct ClassDefFormat1
 {
@@ -1211,8 +1278,9 @@ struct ClassDefFormat1
   }
 
   bool serialize (hb_serialize_context_t *c,
-		  hb_array_t<const HBGlyphID> glyphs,
-		  hb_array_t<const HBUINT16> klasses)
+		  hb_sorted_array_t<const HBGlyphID> glyphs,
+		  const hb_map_t *gid_org_klass_map,
+                  const hb_map_t *klass_map)
   {
     TRACE_SERIALIZE (this);
     if (unlikely (!c->extend_min (*this))) return_trace (false);
@@ -1224,39 +1292,63 @@ struct ClassDefFormat1
       return_trace (true);
     }
 
-    hb_codepoint_t glyph_min = +glyphs | hb_reduce (hb_min, 0xFFFFu);
-    hb_codepoint_t glyph_max = +glyphs | hb_reduce (hb_max, 0u);
-
-    startGlyph = glyph_min;
-    c->check_assign (classValue.len, glyph_max - glyph_min + 1);
+    startGlyph = glyphs[0];
+    c->check_assign (classValue.len, glyphs.length);
     if (unlikely (!c->extend (classValue))) return_trace (false);
 
     for (unsigned int i = 0; i < glyphs.length; i++)
-      classValue[glyphs[i] - glyph_min] = klasses[i];
+    {
+      unsigned orig_klass = gid_org_klass_map->get (glyphs[i]);
+      classValue[glyphs[i] - startGlyph] = klass_map->get (orig_klass);
+    }
 
     return_trace (true);
   }
 
-  bool subset (hb_subset_context_t *c) const
+  bool subset (hb_subset_context_t *c,
+               hb_map_t *klass_map = nullptr /*OUT*/,
+               const hb_set_t *glyphs_set = nullptr /*IN*/) const
   {
     TRACE_SUBSET (this);
-    const hb_set_t &glyphset = *c->plan->glyphset ();
+    const hb_set_t &glyphset = glyphs_set ? *glyphs_set : *c->plan->glyphset ();
     const hb_map_t &glyph_map = *c->plan->glyph_map;
+   
     hb_sorted_vector_t<HBGlyphID> glyphs;
-    hb_vector_t<HBUINT16> klasses;
+    hb_sorted_vector_t<unsigned> orig_klasses;
+    hb_map_t gid_org_klass_map;
 
     hb_codepoint_t start = startGlyph;
     hb_codepoint_t end   = start + classValue.len;
-    for (hb_codepoint_t g = start; g < end; g++)
+    for (const hb_codepoint_t gid : + hb_range (start, end)
+				    | hb_filter (glyphset))
     {
-      if (!glyphset.has (g)) continue;
-      unsigned int value = classValue[g - start];
+      unsigned value = classValue[gid - start];
       if (!value) continue;
-      glyphs.push(glyph_map[g]);
-      klasses.push(value);
+
+      glyphs.push (glyph_map[gid]);
+      gid_org_klass_map.set (glyph_map[gid], value);
+      orig_klasses.push (value);
     }
-    c->serializer->propagate_error (glyphs, klasses);
-    ClassDef_serialize (c->serializer, glyphs, klasses);
+
+    bool has_no_match = glyphset.get_population () > gid_org_klass_map.get_population () ? true : false;
+
+    hb_map_t m, *k_map;
+    if (klass_map) k_map = klass_map;
+    else k_map = &m;
+
+    if (has_no_match) k_map->set (0, 0);
+
+    //remap classes, following fonttools' behavior
+    unsigned idx = k_map->has (0) ? 1 : 0;
+    for (const unsigned k: orig_klasses.iter ())
+    {
+      if (k_map->has (k)) continue;
+      k_map->set (k, idx);
+      idx++;
+    }
+
+    c->serializer->propagate_error (glyphs, orig_klasses);
+    ClassDef_serialize (c->serializer, glyphs, &gid_org_klass_map, k_map);
     return_trace ((bool) glyphs);
   }
 
@@ -1347,8 +1439,9 @@ struct ClassDefFormat2
   }
 
   bool serialize (hb_serialize_context_t *c,
-		  hb_array_t<const HBGlyphID> glyphs,
-		  hb_array_t<const HBUINT16> klasses)
+		  hb_sorted_array_t<const HBGlyphID> glyphs,
+		  const hb_map_t *gid_org_klass_map,
+                  const hb_map_t *klass_map)
   {
     TRACE_SERIALIZE (this);
     if (unlikely (!c->extend_min (*this))) return_trace (false);
@@ -1361,43 +1454,50 @@ struct ClassDefFormat2
 
     unsigned int count = glyphs.len ();
     unsigned int num_ranges = 1;
+
     for (unsigned int i = 1; i < count; i++)
       if (glyphs[i - 1] + 1 != glyphs[i] ||
-	  klasses[i - 1] != klasses[i])
+	  gid_org_klass_map->get (glyphs[i - 1]) != gid_org_klass_map->get (glyphs[i]))
 	num_ranges++;
     rangeRecord.len = num_ranges;
     if (unlikely (!c->extend (rangeRecord))) return_trace (false);
 
     unsigned int range = 0;
     rangeRecord[range].start = glyphs[0];
-    rangeRecord[range].value = klasses[0];
+    unsigned org_klass = gid_org_klass_map->get (glyphs[0]);
+    rangeRecord[range].value = klass_map->get (org_klass);
     for (unsigned int i = 1; i < count; i++)
     {
       if (glyphs[i - 1] + 1 != glyphs[i] ||
-	  klasses[i - 1] != klasses[i])
+          gid_org_klass_map->get (glyphs[i - 1]) != gid_org_klass_map->get (glyphs[i]))
       {
 	rangeRecord[range].end = glyphs[i - 1];
 	range++;
 	rangeRecord[range].start = glyphs[i];
-	rangeRecord[range].value = klasses[i];
+        org_klass = gid_org_klass_map->get (glyphs[i]);
+	rangeRecord[range].value = klass_map->get (org_klass);
       }
     }
     rangeRecord[range].end = glyphs[count - 1];
     return_trace (true);
   }
 
-  bool subset (hb_subset_context_t *c) const
+  bool subset (hb_subset_context_t *c,
+               hb_map_t *klass_map = nullptr /*OUT*/,
+               const hb_set_t *glyphs_set = nullptr /*IN*/) const
   {
     TRACE_SUBSET (this);
-    const hb_set_t &glyphset = *c->plan->glyphset ();
+    const hb_set_t &glyphset = glyphs_set ? *glyphs_set : *c->plan->glyphset ();
     const hb_map_t &glyph_map = *c->plan->glyph_map;
-    hb_vector_t<HBGlyphID> glyphs;
-    hb_vector_t<HBUINT16> klasses;
 
-    unsigned int count = rangeRecord.len;
-    for (unsigned int i = 0; i < count; i++)
+    hb_sorted_vector_t<HBGlyphID> glyphs;
+    hb_sorted_vector_t<unsigned> orig_klasses;
+    hb_map_t gid_org_klass_map;
+
+    unsigned count = rangeRecord.len;
+    for (unsigned i = 0; i < count; i++)
     {
-      unsigned int value = rangeRecord[i].value;
+      unsigned value = rangeRecord[i].value;
       if (!value) continue;
       hb_codepoint_t start = rangeRecord[i].start;
       hb_codepoint_t end   = rangeRecord[i].end + 1;
@@ -1405,11 +1505,30 @@ struct ClassDefFormat2
       {
 	if (!glyphset.has (g)) continue;
 	glyphs.push (glyph_map[g]);
-	klasses.push (value);
+        gid_org_klass_map.set (glyph_map[g], value);
+        orig_klasses.push (value);
       }
     }
-    c->serializer->propagate_error (glyphs, klasses);
-    ClassDef_serialize (c->serializer, glyphs, klasses);
+
+    bool has_no_match = glyphset.get_population () > gid_org_klass_map.get_population () ? true : false;
+
+    hb_map_t m,*k_map;
+    if (klass_map) k_map = klass_map;
+    else k_map = &m;
+
+    if (has_no_match) k_map->set (0, 0);
+
+    //remap classes, following fonttools
+    unsigned idx = k_map->has (0) ? 1 : 0;
+    for (const unsigned k: orig_klasses.iter ())
+    {
+      if (k_map->has (k)) continue;
+      k_map->set (k, idx);
+      idx++;
+    }
+
+    c->serializer->propagate_error (glyphs, orig_klasses);
+    ClassDef_serialize (c->serializer, glyphs, &gid_org_klass_map, k_map);
     return_trace ((bool) glyphs);
   }
 
@@ -1507,8 +1626,9 @@ struct ClassDef
   }
 
   bool serialize (hb_serialize_context_t *c,
-		  hb_array_t<const HBGlyphID> glyphs,
-		  hb_array_t<const HBUINT16> klasses)
+		  hb_sorted_array_t<const HBGlyphID> glyphs,
+		  const hb_map_t *gid_org_klass_map,
+                  const hb_map_t *klass_map)
   {
     TRACE_SERIALIZE (this);
     if (unlikely (!c->extend_min (*this))) return_trace (false);
@@ -1516,14 +1636,14 @@ struct ClassDef
     unsigned int format = 2;
     if (likely (glyphs))
     {
-      hb_codepoint_t glyph_min = +glyphs | hb_reduce (hb_min, 0xFFFFu);
-      hb_codepoint_t glyph_max = +glyphs | hb_reduce (hb_max, 0u);
+      unsigned count = glyphs.len ();
+      hb_codepoint_t glyph_min = glyphs[0];
+      hb_codepoint_t glyph_max = glyphs[count - 1];
 
-      unsigned int count = glyphs.len ();
       unsigned int num_ranges = 1;
       for (unsigned int i = 1; i < count; i++)
 	if (glyphs[i - 1] + 1 != glyphs[i] ||
-	    klasses[i - 1] != klasses[i])
+	    gid_org_klass_map->get (glyphs[i - 1]) != gid_org_klass_map->get (glyphs[i]))
 	  num_ranges++;
 
       if (1 + (glyph_max - glyph_min + 1) < num_ranges * 3)
@@ -1533,18 +1653,20 @@ struct ClassDef
 
     switch (u.format)
     {
-    case 1: return_trace (u.format1.serialize (c, glyphs, klasses));
-    case 2: return_trace (u.format2.serialize (c, glyphs, klasses));
+    case 1: return_trace (u.format1.serialize (c, glyphs, gid_org_klass_map, klass_map));
+    case 2: return_trace (u.format2.serialize (c, glyphs, gid_org_klass_map, klass_map));
     default:return_trace (false);
     }
   }
 
-  bool subset (hb_subset_context_t *c) const
+  bool subset (hb_subset_context_t *c,
+               hb_map_t *klass_map = nullptr /*OUT*/,
+               const hb_set_t *glyphs_set = nullptr /*IN*/) const
   {
     TRACE_SUBSET (this);
     switch (u.format) {
-    case 1: return_trace (u.format1.subset (c));
-    case 2: return_trace (u.format2.subset (c));
+    case 1: return_trace (u.format1.subset (c, klass_map, glyphs_set));
+    case 2: return_trace (u.format2.subset (c, klass_map, glyphs_set));
     default:return_trace (false);
     }
   }
@@ -1612,9 +1734,10 @@ struct ClassDef
 };
 
 static inline void ClassDef_serialize (hb_serialize_context_t *c,
-				       hb_array_t<const HBGlyphID> glyphs,
-				       hb_array_t<const HBUINT16> klasses)
-{ c->start_embed<ClassDef> ()->serialize (c, glyphs, klasses); }
+				       hb_sorted_array_t<const HBGlyphID> glyphs,
+				       const hb_map_t *gid_org_klass_map,
+                                       const hb_map_t *klass_map)
+{ c->start_embed<ClassDef> ()->serialize (c, glyphs, gid_org_klass_map, klass_map); }
 
 
 /*
