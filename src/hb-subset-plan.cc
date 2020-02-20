@@ -125,11 +125,12 @@ _gpos_closure_lookups_features (hb_face_t      *face,
 static inline void
 _cmap_closure (hb_face_t           *face,
 	       const hb_set_t      *unicodes,
+               const hb_set_t      *variation_selectors,
 	       hb_set_t            *glyphset)
 {
   OT::cmap::accelerator_t cmap;
   cmap.init (face);
-  cmap.table->closure_glyphs (unicodes, glyphset);
+  cmap.table->closure_glyphs (unicodes, variation_selectors, glyphset);
   cmap.fini ();
 }
 
@@ -168,13 +169,20 @@ _populate_gids_to_retain (hb_subset_plan_t* plan,
   plan->_glyphset_gsub->add (0); // Not-def
   hb_set_union (plan->_glyphset_gsub, input_glyphs_to_retain);
 
+  // Extract any codepoints which are variation selectors, we'll need these to properly
+  // close over cmap 14. This needs to be done before we drop unicodes that don't
+  // have associated gids (which variation selectors won't have).
+  hb_set_t variation_selectors;
+  cmap.collect_variation_selectors (&variation_selectors);
+  variation_selectors.intersect (unicodes);
+
   hb_codepoint_t cp = HB_SET_VALUE_INVALID;
   while (unicodes->next (&cp))
   {
     hb_codepoint_t gid;
     if (!cmap.get_nominal_glyph (cp, &gid))
     {
-      DEBUG_MSG(SUBSET, nullptr, "Drop U+%04X; no gid", cp);
+      DEBUG_MSG(SUBSET, nullptr, "Drop U+%04X; no gid, not a variation selector.", cp);
       continue;
     }
     plan->unicodes->add (cp);
@@ -182,7 +190,7 @@ _populate_gids_to_retain (hb_subset_plan_t* plan,
     plan->_glyphset_gsub->add (gid);
   }
 
-  _cmap_closure (plan->source, plan->unicodes, plan->_glyphset_gsub);
+  _cmap_closure (plan->source, plan->unicodes, &variation_selectors, plan->_glyphset_gsub);
 
 #ifndef HB_NO_SUBSET_LAYOUT
   if (close_over_gsub)

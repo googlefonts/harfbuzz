@@ -966,10 +966,12 @@ struct CmapSubtableFormat14
     }
   }
 
-  void closure_glyphs (const hb_set_t      *unicodes,
-		       hb_set_t            *glyphset) const
+  void closure_glyphs (const hb_set_t *unicodes,
+                       const hb_set_t *variation_selectors,
+		       hb_set_t       *glyphset /* OUT */) const
   {
     + hb_iter (record)
+    | hb_filter (variation_selectors, &VariationSelectorRecord::varSelector)
     | hb_filter (hb_bool, &VariationSelectorRecord::nonDefaultUVS)
     | hb_map (&VariationSelectorRecord::nonDefaultUVS)
     | hb_map (hb_add (this))
@@ -1175,13 +1177,14 @@ struct cmap
   }
 
   void closure_glyphs (const hb_set_t      *unicodes,
+                       const hb_set_t      *variation_selectors,
 		       hb_set_t            *glyphset) const
   {
     + hb_iter (encodingRecord)
     | hb_map (&EncodingRecord::subtable)
     | hb_map (hb_add (this))
     | hb_filter ([&] (const CmapSubtable& _) { return _.u.format == 14; })
-    | hb_apply ([=] (const CmapSubtable& _) { _.u.format14.closure_glyphs (unicodes, glyphset); })
+    | hb_apply ([=] (const CmapSubtable& _) { _.u.format14.closure_glyphs (unicodes, variation_selectors, glyphset); })
     ;
   }
 
