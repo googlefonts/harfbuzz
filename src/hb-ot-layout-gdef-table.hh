@@ -175,6 +175,9 @@ struct CaretValueFormat3
 
     return_trace (out->deviceTable.serialize_copy (c->serializer, deviceTable, this));
   }
+  
+  void closure_variation_indices (hb_set_t *layout_variation_indices) const
+  { (this+deviceTable).closure_variation_indices (layout_variation_indices); }
 
   bool sanitize (hb_sanitize_context_t *c) const
   {
@@ -218,6 +221,19 @@ struct CaretValue
     case 2: return_trace (c->dispatch (u.format2, hb_forward<Ts> (ds)...));
     case 3: return_trace (c->dispatch (u.format3, hb_forward<Ts> (ds)...));
     default:return_trace (c->default_return_value ());
+    }
+  }
+
+  void closure_variation_indices (hb_set_t *layout_variation_indices) const
+  {
+    switch (u.format) {
+    case 1:
+    case 2:
+      return;
+    case 3:
+      u.format3.closure_variation_indices (layout_variation_indices);
+      return;
+    default: return;
     }
   }
 
@@ -277,6 +293,12 @@ struct LigGlyph
 
     return_trace (bool (out->carets));
   }
+  
+  void closure_variation_indices (hb_closure_variation_indices_context_t *c) const
+  {
+    for (const OffsetTo<CaretValue>& offset : carets.iter ())
+      (this+offset).closure_variation_indices (c->layout_variation_indices);
+  }
 
   bool sanitize (hb_sanitize_context_t *c) const
   {
@@ -334,6 +356,16 @@ struct LigCaretList
     out->coverage.serialize (c->serializer, out)
 		 .serialize (c->serializer, new_coverage.iter ());
     return_trace (bool (new_coverage));
+  }
+
+  void closure_variation_indices (hb_closure_variation_indices_context_t *c) const
+  {
+    + hb_zip (this+coverage, ligGlyph)
+    | hb_filter (c->glyph_set, hb_first)
+    | hb_map (hb_second)
+    | hb_map (hb_add (this))
+    | hb_apply ([c] (const LigGlyph& _) { _.closure_variation_indices (c); })
+    ;
   }
 
   bool sanitize (hb_sanitize_context_t *c) const
@@ -542,6 +574,36 @@ struct GDEF
     return min_size +
 	   (version.to_int () >= 0x00010002u ? markGlyphSetsDef.static_size : 0) +
 	   (version.to_int () >= 0x00010003u ? varStore.static_size : 0);
+  }
+
+  void closure_variation_indices (hb_closure_variation_indices_context_t *c) const
+  { (this+ligCaretList).closure_variation_indices (c); }
+
+  void remap_layout_variation_indices (const hb_set_t *layout_variation_indices,
+				       hb_map_t *layout_variation_idx_map /* INOUT */) const
+  {
+    if (version.to_int () < 0x00010003u || !varStore) return;
+    if (layout_variation_indices->is_empty ()) return;
+    
+    hb_hashmap_t<uint16_t, hb_set_t *, 0xffff, nullptr> used_varidxes;
+    for (unsigned idx : layout_variation_indices->iter ())
+    {
+      uint16_t major = idx >> 16;
+      uint16_t minor = idx & 0xFFFF;
+      if (!used_varidxes.has (major))
+      {
+        hb_set_t *t = hb_set_create ();
+        if (!t) return;
+        used_varidxes.set (major, t);
+      }
+      used_varidxes[major]->add (minor);
+    }
+
+    (this+varStore).remap_layout_variation_indices (&used_varidxes, layout_variation_idx_map);
+
+    for (hb_set_t* p :  + used_varidxes.iter ()
+			| hb_map (hb_second))
+    { hb_set_destroy (p); }
   }
 
   bool subset (hb_subset_context_t *c) const

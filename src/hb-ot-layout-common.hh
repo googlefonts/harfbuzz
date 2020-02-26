@@ -142,6 +142,28 @@ struct hb_subset_layout_context_t :
   unsigned feature_index_count;
 };
 
+struct hb_closure_variation_indices_context_t :
+       hb_dispatch_context_t<hb_closure_variation_indices_context_t, hb_empty_t, 0>
+{
+  const char *get_name () { return "CLOSURE_LAYOUT_VARIATION_IDXES"; }
+  template <typename T>
+  return_t dispatch (const T &obj) { obj.closure_variation_indices (this); return hb_empty_t (); }
+  static return_t default_return_value () { return hb_empty_t (); }
+
+  hb_set_t *layout_variation_indices;
+  const hb_set_t *glyph_set;
+  const hb_map_t *gpos_lookups;
+  unsigned int debug_depth;
+
+  hb_closure_variation_indices_context_t (hb_set_t *layout_variation_indices_,
+					  const hb_set_t *glyph_set_,
+					  const hb_map_t *gpos_lookups_) :
+					layout_variation_indices (layout_variation_indices_),
+					glyph_set (glyph_set_),
+					gpos_lookups (gpos_lookups_),
+					debug_depth (0) {}
+};
+
 template<typename OutputArray>
 struct subset_offset_array_t
 {
@@ -2309,6 +2331,21 @@ struct VarData
     }
   }
 
+  void remap_layout_variation_indices (const hb_set_t *used_minors,
+				       unsigned org_major,
+				       unsigned new_major,
+				       hb_map_t *layout_variation_idx_map /* INOUT */) const
+  {
+    unsigned new_minor = 0;
+    for (unsigned org_minor : used_minors->iter ())
+    {
+      unsigned idx = (org_major << 16) + org_minor;
+      unsigned new_idx = (new_major << 16) + new_minor;
+      layout_variation_idx_map->set (idx, new_idx);
+      ++new_minor;
+    }
+  }
+
   protected:
   const HBUINT8 *get_delta_bytes () const
   { return &StructAfter<HBUINT8> (regionIndices); }
@@ -2438,6 +2475,19 @@ struct VariationStore
   }
 
   unsigned int get_sub_table_count () const { return dataSets.len; }
+
+  typedef hb_hashmap_t<uint16_t, hb_set_t *, 0xffff, nullptr> device_varidxes_map;
+  void remap_layout_variation_indices (const device_varidxes_map *used_varidxes,
+				       hb_map_t                  *layout_variation_idx_map /* INOUT */) const
+  {
+    unsigned new_major = 0;
+    for (unsigned i = 0; i < (unsigned) dataSets.len; i++)
+    {
+      if (!used_varidxes->has (i)) continue;
+      (this+dataSets[i]).remap_layout_variation_indices (used_varidxes->get (i), i, new_major, layout_variation_idx_map);
+      new_major++;
+    }
+  }
 
   protected:
   HBUINT16				format;
@@ -2895,6 +2945,12 @@ struct VariationDevice
     return_trace (c->embed<VariationDevice> (this));
   }
 
+  void record_variation_index (hb_set_t *layout_variation_indices) const
+  {
+    unsigned var_idx = (outerIndex << 16) + innerIndex;
+    layout_variation_indices->add (var_idx);
+  }
+
   bool sanitize (hb_sanitize_context_t *c) const
   {
     TRACE_SANITIZE (this);
@@ -2996,6 +3052,25 @@ struct Device
 #endif
     default:
       return_trace (nullptr);
+    }
+  }
+
+  void closure_variation_indices (hb_set_t *layout_variation_indices) const
+  {
+    switch (u.b.format) {
+#ifndef HB_NO_HINTING
+    case 1:
+    case 2:
+    case 3:
+      return;
+#endif
+#ifndef HB_NO_VAR
+    case 0x8000:
+      u.variation.record_variation_index (layout_variation_indices);
+      return;
+#endif
+    default:
+      return;
     }
   }
 
