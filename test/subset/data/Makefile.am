@@ -21,6 +21,7 @@ EXTRA_DIST += \
 	expected/layout.gsub3 \
 	expected/layout.gsub6 \
 	expected/layout.gdef \
+	expected/layout.gdef-varstore \
 	expected/cmap \
 	expected/cmap14 \
 	expected/sbix \
