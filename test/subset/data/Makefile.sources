@@ -13,6 +13,7 @@ TESTS = \
 	tests/layout.gsub3.tests \
 	tests/layout.gsub6.tests \
 	tests/layout.gdef.tests \
+	tests/layout.gdef-varstore.tests \
 	tests/cmap.tests \
 	tests/cmap14.tests \
 	tests/sbix.tests \

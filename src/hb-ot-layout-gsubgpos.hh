@@ -3129,7 +3129,8 @@ struct GSUBGPOS
     unsigned int feature_count = hb_min (get_feature_count (), (unsigned) HB_MAX_FEATURES);
     for (unsigned i = 0; i < feature_count; i++)
     {
-      if (get_feature (i).intersects_lookup_indexes (lookup_indexes))
+      const Feature& f = get_feature (i);
+      if ((!f.featureParams.is_null ()) || f.intersects_lookup_indexes (lookup_indexes))
         feature_indexes->add (i);
     }
 #ifndef HB_NO_VAR
