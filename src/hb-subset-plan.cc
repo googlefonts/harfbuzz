@@ -30,6 +30,8 @@
 
 #include "hb-ot-cmap-table.hh"
 #include "hb-ot-glyf-table.hh"
+#include "hb-ot-layout-gdef-table.hh"
+#include "hb-ot-layout-gpos-table.hh"
 #include "hb-ot-cff1-table.hh"
 #include "hb-ot-color-colr-table.hh"
 #include "hb-ot-var-fvar-table.hh"
@@ -131,13 +133,23 @@ _gpos_closure_lookups_features (hb_face_t      *face,
 
 #ifndef HB_NO_VAR
 static inline void
-  _collect_layout_variation_indices (hb_face_t *face,
-				     const hb_set_t *glyphset,
-				     const hb_map_t *gpos_lookups,
-				     hb_set_t  *layout_variation_indices,
-				     hb_map_t  *layout_variation_idx_map)
+_collect_layout_variation_indices (hb_face_t *face,
+                                   const hb_set_t *glyphset,
+                                   const hb_map_t *gpos_lookups,
+                                   hb_set_t  *layout_variation_indices,
+                                   hb_map_t  *layout_variation_idx_map)
 {
-  hb_ot_layout_collect_variation_indices (face, glyphset, gpos_lookups, layout_variation_indices, layout_variation_idx_map);
+  hb_blob_ptr_t<OT::GDEF> gdef = hb_sanitize_context_t ().reference_table<OT::GDEF> (face);
+  hb_blob_ptr_t<OT::GPOS> gpos = hb_sanitize_context_t ().reference_table<OT::GPOS> (face);
+
+  if (!gdef->has_data ()) return;
+  OT::hb_collect_variation_indices_context_t c (layout_variation_indices, glyphset, gpos_lookups);
+  gdef->collect_variation_indices (&c);
+
+  if (hb_ot_layout_has_positioning (face))
+    gpos->collect_variation_indices (&c);
+
+  gdef->remap_layout_variation_indices (layout_variation_indices, layout_variation_idx_map);
 }
 #endif
 
