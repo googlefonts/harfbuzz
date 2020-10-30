@@ -136,7 +136,14 @@ struct hb_serialize_context_t
 
   template <typename T1, typename T2>
   bool check_equal (T1 &&v1, T2 &&v2)
-  { return check_success ((long long) v1 == (long long) v2); }
+  {
+    if ((long long) v1 != (long long) v2)
+    {
+      err_offset_overflow ();
+      return false;
+    }
+    return true;
+  }
 
   template <typename T1, typename T2>
   bool check_assign (T1 &v1, T2 &&v2)
@@ -399,6 +406,7 @@ struct hb_serialize_context_t
 
   /* Following two functions exist to allow setting breakpoint on. */
   void err_ran_out_of_room () { this->ran_out_of_room = true; }
+  void err_offset_overflow () { this->offset_overflow = true; }
   void err_other_error () { this->successful = false; }
 
   template <typename Type>
@@ -519,7 +527,7 @@ struct hb_serialize_context_t
 			   (char *) b.arrayZ, free);
   }
 
-  const hb_vector_t<object_t *>& object_graph()
+  const hb_vector_t<object_t *>& object_graph() const
   { return packed; }
 
   private:
@@ -536,6 +544,7 @@ struct hb_serialize_context_t
   unsigned int debug_depth;
   bool successful;
   bool ran_out_of_room;
+  bool offset_overflow;
 
   private:
 
