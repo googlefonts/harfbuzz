@@ -23,6 +23,7 @@ TESTS = \
 	tests/layout.gpos9.tests \
 	tests/layout.gsub3.tests \
 	tests/layout.gsub6.tests \
+	tests/layout.notonastaliqurdu.tests \
 	tests/layout.tests \
 	tests/sbix.tests \
 	$(NULL)
