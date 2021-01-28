@@ -80,6 +80,10 @@ struct hb_subset_plan_t
   hb_map_t *gpos_lookups;
 
   //active features we'd like to retain
+  hb_map_t *gsub_features_org;
+  hb_map_t *gpos_features_org;
+
+  //active features after removing redundant langsys and prune_features
   hb_map_t *gsub_features;
   hb_map_t *gpos_features;
 

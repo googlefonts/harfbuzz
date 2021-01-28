@@ -66,10 +66,39 @@ _remap_indexes (const hb_set_t *indexes,
 
 }
 
+static void
+_remap_feature_indexes (const hb_set_t *indexes,
+                        const hb_map_t *duplicate_feature_map,
+                        hb_map_t       *mapping /* OUT */)
+{
+  if (duplicate_feature_map->is_empty ())
+  {
+    _remap_indexes (indexes, mapping);
+    return;
+  }
+
+  unsigned i = 0;
+
+  for (unsigned org_index : indexes->iter ())
+  {
+    if (!duplicate_feature_map-> has (org_index))
+    {
+      mapping->set (org_index, i);
+      i++;
+    }
+    else
+    {
+      unsigned new_index = mapping->get (duplicate_feature_map->get (org_index));
+      mapping->set (org_index, new_index);
+    }
+  }
+}
+
 static inline void
 _gsub_closure_glyphs_lookups_features (hb_face_t *face,
 				       hb_set_t *gids_to_retain,
 				       hb_map_t *gsub_lookups,
+				       hb_map_t *gsub_features_org,
 				       hb_map_t *gsub_features)
 {
   hb_set_t lookup_indices;
@@ -96,7 +125,13 @@ _gsub_closure_glyphs_lookups_features (hb_face_t *face,
                                  nullptr,
                                  nullptr,
                                  &feature_indices);
-  gsub->prune_features (gsub_lookups, &feature_indices);
+
+  hb_map_t duplicate_feature_map;
+  gsub->prune_features (gsub_lookups, &feature_indices, &duplicate_feature_map);
+  _remap_feature_indexes (&feature_indices, &duplicate_feature_map, gsub_features_org);
+
+  feature_indices.clear ();
+  gsub->collect_features (gsub_features_org, &feature_indices);
   _remap_indexes (&feature_indices, gsub_features);
 
   gsub.destroy ();
@@ -106,6 +141,7 @@ static inline void
 _gpos_closure_lookups_features (hb_face_t      *face,
 				const hb_set_t *gids_to_retain,
 				hb_map_t       *gpos_lookups,
+				hb_map_t       *gpos_features_org,
 				hb_map_t       *gpos_features)
 {
   hb_set_t lookup_indices;
@@ -129,8 +165,15 @@ _gpos_closure_lookups_features (hb_face_t      *face,
                                  nullptr,
                                  nullptr,
                                  &feature_indices);
-  gpos->prune_features (gpos_lookups, &feature_indices);
+
+  hb_map_t duplicate_feature_map;
+  gpos->prune_features (gpos_lookups, &feature_indices, &duplicate_feature_map);
+  _remap_feature_indexes (&feature_indices, &duplicate_feature_map, gpos_features_org);
+
+  feature_indices.clear ();
+  gpos->collect_features (gpos_features_org, &feature_indices);
   _remap_indexes (&feature_indices, gpos_features);
+
   gpos.destroy ();
 }
 #endif
@@ -231,10 +274,10 @@ _populate_gids_to_retain (hb_subset_plan_t* plan,
 #ifndef HB_NO_SUBSET_LAYOUT
   if (close_over_gsub)
     // closure all glyphs/lookups/features needed for GSUB substitutions.
-    _gsub_closure_glyphs_lookups_features (plan->source, plan->_glyphset_gsub, plan->gsub_lookups, plan->gsub_features);
+    _gsub_closure_glyphs_lookups_features (plan->source, plan->_glyphset_gsub, plan->gsub_lookups, plan->gsub_features_org, plan->gsub_features);
 
   if (close_over_gpos)
-    _gpos_closure_lookups_features (plan->source, plan->_glyphset_gsub, plan->gpos_lookups, plan->gpos_features);
+    _gpos_closure_lookups_features (plan->source, plan->_glyphset_gsub, plan->gpos_lookups, plan->gpos_features_org, plan->gpos_features);
 #endif
   _remove_invalid_gids (plan->_glyphset_gsub, plan->source->get_num_glyphs ());
 
@@ -356,7 +399,9 @@ hb_subset_plan_create (hb_face_t         *face,
   plan->reverse_glyph_map = hb_map_create ();
   plan->gsub_lookups = hb_map_create ();
   plan->gpos_lookups = hb_map_create ();
+  plan->gsub_features_org = hb_map_create ();
   plan->gsub_features = hb_map_create ();
+  plan->gpos_features_org = hb_map_create ();
   plan->gpos_features = hb_map_create ();
   plan->layout_variation_indices = hb_set_create ();
   plan->layout_variation_idx_map = hb_map_create ();
@@ -402,7 +447,9 @@ hb_subset_plan_destroy (hb_subset_plan_t *plan)
   hb_set_destroy (plan->_glyphset_gsub);
   hb_map_destroy (plan->gsub_lookups);
   hb_map_destroy (plan->gpos_lookups);
+  hb_map_destroy (plan->gsub_features_org);
   hb_map_destroy (plan->gsub_features);
+  hb_map_destroy (plan->gpos_features_org);
   hb_map_destroy (plan->gpos_features);
   hb_set_destroy (plan->layout_variation_indices);
   hb_map_destroy (plan->layout_variation_idx_map);

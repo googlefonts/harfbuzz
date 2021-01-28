@@ -52,7 +52,7 @@ struct hb_intersects_context_t :
   const hb_set_t *glyphs;
 
   hb_intersects_context_t (const hb_set_t *glyphs_) :
-			     glyphs (glyphs_) {}
+                            glyphs (glyphs_) {}
 };
 
 struct hb_closure_context_t :
@@ -3340,6 +3340,18 @@ struct GSUBGPOS
     hb_set_subtract (lookup_indexes, &inactive_lookups);
   }
 
+  void collect_features (const hb_map_t *org_feature_index_map,
+                         hb_set_t       *new_feature_indexes /* OUT */) const
+  {
+    hb_collect_features_wo_redundant_langsys_context_t c (this, org_feature_index_map, new_feature_indexes);
+    unsigned count = get_script_count ();
+    for (unsigned script_index = 0; script_index < count; script_index++)
+    {
+      const Script& s = get_script (script_index);
+      s.collect_features (&c);
+    }
+  }
+
   template <typename TLookup>
   bool subset (hb_subset_layout_context_t *c) const
   {
@@ -3381,7 +3393,8 @@ struct GSUBGPOS
   }
 
   void prune_features (const hb_map_t *lookup_indices, /* IN */
-                       hb_set_t       *feature_indices /* IN/OUT */) const
+		       hb_set_t       *feature_indices, /* IN/OUT */
+		       hb_map_t       *duplicate_index_map) const
   {
 #ifndef HB_NO_VAR
     // This is the set of feature indices which have alternate versions defined
@@ -3404,6 +3417,42 @@ struct GSUBGPOS
           && !f.intersects_lookup_indexes (lookup_indices)
           && !alternate_feature_indices.has (i))
         feature_indices->del (i);
+    }
+
+    //find out duplicate features after subset
+    unsigned prev = 0xFFFFu;
+    for (unsigned i : feature_indices->iter ())
+    {
+      if (prev == 0xFFFFu)
+      { prev = i; continue;}
+
+      hb_tag_t t = get_feature_tag (i);
+      hb_tag_t prev_t = get_feature_tag (prev);
+      if (t != prev_t)
+      { prev = i; continue; }
+
+      const Feature& f = get_feature (i);
+      const Feature& prev_f = get_feature (prev);
+
+      auto f_iter =
+      + hb_iter (f.lookupIndex)
+      | hb_filter (lookup_indices)
+      ;
+
+      auto prev_iter =
+      + hb_iter (prev_f.lookupIndex)
+      | hb_filter (lookup_indices)
+      ;
+
+      if (f_iter.len () != prev_iter.len ())
+      { prev = i; continue; }
+
+      bool is_equal = true;
+      for (auto _ : + hb_zip (f_iter, prev_iter))
+        if (_.first != _.second) { is_equal = false; break; }
+
+      if (is_equal == true) duplicate_index_map->set (i, prev);
+      else prev = i;
     }
   }
 

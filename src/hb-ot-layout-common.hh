@@ -94,6 +94,57 @@ static void ClassDef_remap_and_serialize (hb_serialize_context_t *c,
 					  const hb_set_t &klasses,
 					  hb_map_t *klass_map /*INOUT*/);
 
+
+struct hb_collect_features_wo_redundant_langsys_context_t
+{
+  hb_collect_features_wo_redundant_langsys_context_t (const void         *table_,
+                                                      const hb_map_t     *org_feature_index_map_,
+                                                      hb_set_t           *new_collected_feature_indexes_)
+      :table (table_),
+      org_feature_index_map (org_feature_index_map_),
+      new_feature_indexes (new_collected_feature_indexes_),
+      script_count (0),langsys_count (0) {}
+
+  bool visitedScript (const void *s)
+  {
+    if (script_count++ > HB_MAX_SCRIPTS)
+      return true;
+
+    return visited (s, visited_script);
+  }
+
+  bool visitedLangsys (const void *l)
+  {
+    if (langsys_count++ > HB_MAX_LANGSYS)
+      return true;
+
+    return visited (l, visited_langsys);
+  }
+
+  private:
+  template <typename T>
+  bool visited (const T *p, hb_set_t &visited_set)
+  {
+    hb_codepoint_t delta = (hb_codepoint_t) ((uintptr_t) p - (uintptr_t) table);
+     if (visited_set.has (delta))
+      return true;
+
+    visited_set.add (delta);
+    return false;
+  }
+
+  public:
+  const void *table;
+  const hb_map_t     *org_feature_index_map;
+  hb_set_t           *new_feature_indexes;
+
+  private:
+  hb_set_t visited_script;
+  hb_set_t visited_langsys;
+  unsigned script_count;
+  unsigned langsys_count;
+};
+
 struct hb_subset_layout_context_t :
   hb_dispatch_context_t<hb_subset_layout_context_t, hb_empty_t, HB_DEBUG_SUBSET>
 {
@@ -125,16 +176,19 @@ struct hb_subset_layout_context_t :
   hb_subset_context_t *subset_context;
   const hb_tag_t table_tag;
   const hb_map_t *lookup_index_map;
+  const hb_map_t *feature_index_map_org;
   const hb_map_t *feature_index_map;
 
   hb_subset_layout_context_t (hb_subset_context_t *c_,
 			      hb_tag_t tag_,
 			      hb_map_t *lookup_map_,
-			      hb_map_t *feature_map_) :
+			      hb_map_t *feature_map_org_,
+			      hb_map_t *feature_index_map_) :
 				subset_context (c_),
 				table_tag (tag_),
 				lookup_index_map (lookup_map_),
-				feature_index_map (feature_map_),
+				feature_index_map_org (feature_map_org_),
+				feature_index_map (feature_index_map_),
 				script_count (0),
 				langsys_count (0),
 				feature_index_count (0),
@@ -506,16 +560,44 @@ struct LangSys
     return_trace (c->embed (*this));
   }
 
-  bool operator == (const LangSys& o) const
+  bool compare (const LangSys& o, const hb_map_t *feature_index_map) const
   {
-    if (featureIndex.len != o.featureIndex.len ||
-	reqFeatureIndex != o.reqFeatureIndex)
+    if (reqFeatureIndex != o.reqFeatureIndex)
       return false;
 
-    for (const auto _ : + hb_zip (featureIndex, o.featureIndex))
+    auto iter =
+    + hb_iter (featureIndex)
+    | hb_filter (feature_index_map)
+    | hb_map (feature_index_map)
+    ;
+
+    auto o_iter =
+    + hb_iter (o.featureIndex)
+    | hb_filter (feature_index_map)
+    | hb_map (feature_index_map)
+    ;
+
+    if (iter.len () != o_iter.len ())
+      return false;
+
+    for (const auto _ : + hb_zip (iter, o_iter))
       if (_.first != _.second) return false;
 
     return true;
+  }
+
+  void collect_features (hb_collect_features_wo_redundant_langsys_context_t *c) const
+  {
+    if (!has_required_feature () && !get_feature_count ()) return;
+    if (c->visitedLangsys (this)) return;
+    if (has_required_feature () &&
+        c->org_feature_index_map->has (reqFeatureIndex))
+      c->new_feature_indexes->add (get_required_feature_index ());
+
+    + hb_iter (featureIndex)
+    | hb_filter (c->org_feature_index_map)
+    | hb_sink (c->new_feature_indexes)
+    ;
   }
 
   bool subset (hb_subset_context_t        *c,
@@ -581,6 +663,35 @@ struct Script
   bool has_default_lang_sys () const           { return defaultLangSys != 0; }
   const LangSys& get_default_lang_sys () const { return this+defaultLangSys; }
 
+  void collect_features (hb_collect_features_wo_redundant_langsys_context_t *c) const
+  {
+    if (!has_default_lang_sys () && !get_lang_sys_count ()) return;
+    if (c->visitedScript (this)) return;
+
+    if (has_default_lang_sys ())
+    {
+      //only collect features from non-redundant langsys
+      const LangSys& d = get_default_lang_sys ();
+      d.collect_features (c);
+
+      for (const Record<LangSys>& record : langSys.iter ())
+      {
+        const LangSys& l = this+record.offset;
+        if (l.compare (d, c->org_feature_index_map)) continue;
+
+        l.collect_features (c);
+      }
+    }
+    else
+    {
+      for (const Record<LangSys>& record : langSys.iter ())
+      {
+        const LangSys& l = this+record.offset;
+        l.collect_features (c);
+      }
+    }
+  }
+
   bool subset (hb_subset_context_t         *c,
 	       hb_subset_layout_context_t  *l,
 	       const Tag                   *tag) const
@@ -613,9 +724,10 @@ struct Script
     | hb_filter ([=] (const Record<LangSys>& record) {return l->visitLangSys (); })
     | hb_filter ([&] (const Record<LangSys>& record)
 		 {
-		   const LangSys& d = this+defaultLangSys;
-		   const LangSys& l = this+record.offset;
-		   return !(l == d);
+                   if (defaultLangSys == 0) return true;
+		   const LangSys& dr = this+defaultLangSys;
+		   const LangSys& lr = this+record.offset;
+		   return !(lr.compare (dr, l->feature_index_map_org));
 		 })
     | hb_apply (subset_record_array (l, &(out->langSys), this))
     ;

@@ -1564,7 +1564,7 @@ struct GSUB : GSUBGPOS
 
   bool subset (hb_subset_context_t *c) const
   {
-    hb_subset_layout_context_t l (c, tableTag, c->plan->gsub_lookups, c->plan->gsub_features);
+    hb_subset_layout_context_t l (c, tableTag, c->plan->gsub_lookups, c->plan->gsub_features_org, c->plan->gsub_features);
     return GSUBGPOS::subset<SubstLookup> (&l);
   }
 
