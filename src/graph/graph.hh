@@ -42,7 +42,13 @@ struct graph_t
   struct vertex_t
   {
     hb_serialize_context_t::object_t obj;
-    int64_t distance = 0 ;
+    int64_t distance = 0;
+    // TODO(garretrieger): change implementation to explicitly assign
+    //  each vertex it's space number (also setting is_space_root)
+    //  as needed.
+    //  - During initial space assignment.
+    //  - When new nodes are introduced (eg. table splitting)
+    //  - When nodes are moved between spaces.
     unsigned space = 0 ;
     unsigned start = 0;
     unsigned end = 0;
@@ -51,6 +57,7 @@ struct graph_t
     unsigned incoming_edges_ = 0;
     unsigned single_parent = (unsigned) -1;
     hb_hashmap_t<unsigned, unsigned> parents;
+    bool is_space_root_ = false;
     public:
 
     auto parents_iter () const HB_AUTO_RETURN
@@ -159,6 +166,7 @@ struct graph_t
       hb_swap (a.obj, b.obj);
       hb_swap (a.distance, b.distance);
       hb_swap (a.space, b.space);
+      hb_swap (a.is_space_root_, b.is_space_root_);
       hb_swap (a.single_parent, b.single_parent);
       hb_swap (a.parents, b.parents);
       hb_swap (a.incoming_edges_, b.incoming_edges_);
@@ -183,6 +191,11 @@ struct graph_t
     bool is_shared () const
     {
       return parents.get_population () > 1;
+    }
+
+    bool is_space_root() const
+    {
+      return space;
     }
 
     unsigned incoming_edges () const
@@ -448,11 +461,12 @@ struct graph_t
   template<typename T>
   graph_t (const T& objects)
       : parents_invalid (true),
-        distance_invalid (true),
+        distance_invalid_by_space (),
         positions_invalid (true),
         successful (true),
         buffers ()
   {
+    distance_invalid_by_space.add(0);
     num_roots_for_space_.push (1);
     bool removed_nil = false;
     vertices_.alloc (objects.length);
@@ -793,15 +807,16 @@ struct graph_t
         DEBUG_MSG (SUBSET_REPACK, nullptr, "Subgraph %u gets space %u", root, next_space);
         vertices_[root].space = next_space;
         num_roots_for_space_[next_space] = num_roots_for_space_[next_space] + 1;
-        distance_invalid = true;
+
+        // space 0 is being modified because nodes are being moved out of it. So
+        // trigger full distance invalidation.
+        distance_invalid_by_space.add(0);
         positions_invalid = true;
       }
 
       // TODO(grieger): special case for GSUB/GPOS use extension promotions to move 16 bit space
       //                into the 32 bit space as needed, instead of using isolation.
     }
-
-
 
     return true;
   }
@@ -950,7 +965,8 @@ struct graph_t
                    unsigned new_parent_idx,
                    const O* new_offset)
   {
-    distance_invalid = true;
+    distance_invalid_by_space.add(space_for(old_parent_idx));
+    distance_invalid_by_space.add(space_for(new_parent_idx));
     positions_invalid = true;
 
     auto& old_v = vertices_[old_parent_idx];
@@ -997,7 +1013,9 @@ struct graph_t
   unsigned duplicate (unsigned node_idx)
   {
     positions_invalid = true;
-    distance_invalid = true;
+    // TODO(garretrieger): this invalidates all distances.
+    //  can this be made more specific?
+    distance_invalid_by_space.add(0);
 
     auto* clone = vertices_.push ();
     auto& child = vertices_[node_idx];
@@ -1165,7 +1183,9 @@ struct graph_t
   unsigned new_node (char* head, char* tail)
   {
     positions_invalid = true;
-    distance_invalid = true;
+    // TODO(garretrieger): this invalidates all distances.
+    //  can this be made more specific?
+    distance_invalid_by_space.add(0);
 
     auto* clone = vertices_.push ();
     if (vertices_.in_error ()) {
@@ -1308,13 +1328,14 @@ struct graph_t
   {
     num_roots_for_space_.push (0);
     unsigned new_space = num_roots_for_space_.length - 1;
+    distance_invalid_by_space.add(new_space);
 
     for (unsigned index : indices) {
       auto& node = vertices_[index];
       num_roots_for_space_[node.space] = num_roots_for_space_[node.space] - 1;
       num_roots_for_space_[new_space] = num_roots_for_space_[new_space] + 1;
       node.space = new_space;
-      distance_invalid = true;
+      distance_invalid_by_space.add(node.space);
       positions_invalid = true;
     }
   }
@@ -1429,13 +1450,60 @@ struct graph_t
     positions_invalid = false;
   }
 
+  int64_t distance_for_node (
+    int64_t parent_distance,
+    const hb_serialize_context_t::object_t::link_t& link,
+    const hb_serialize_context_t::object_t& child)
+  {
+    unsigned link_width = link.width ? link.width : 4; // treat virtual offsets as 32 bits wide
+    int64_t child_weight = (child.tail - child.head) +
+      ((int64_t) 1 << (link_width * 8)) * (vertices_.arrayZ[link.objidx].space + 1);
+    return parent_distance + child_weight;
+  }
+
+  int64_t distance_for_node (unsigned child_idx)
+  {
+    const auto& child = vertices_.arrayZ[child_idx];
+
+    int64_t distance = hb_int_max (int64_t);
+    for (unsigned parent_idx : child.parents_iter()) {
+      const auto& parent = vertices_.arrayZ[parent_idx];
+
+      for (const auto& link : parent.obj.all_links()) {
+        if (link.objidx != child_idx) continue;
+        
+        int64_t new_distance = distance_for_node (parent.distance, link, child.obj);
+        if (new_distance < distance) {
+          distance = new_distance;
+        }
+      }
+    }
+    
+    return distance;
+  }
+
   /*
    * Finds the distance to each object in the graph
    * from the initial node.
    */
   void update_distances ()
   {
-    if (!distance_invalid) return;
+    if (distance_invalid_by_space.is_empty()) return;
+
+    bool update_all = distance_invalid_by_space.has(0);
+    
+    hb_priority_queue_t<int64_t> queue;
+    unsigned count = vertices_.length;
+    queue.alloc (count);
+
+    // TODO(garretrieger): implement space specific distance updates.
+    // 1. Cache the current space number on each vertex.
+    // 2. Only reset distances for vertices that are in spaces to be updated.
+    // 3. Skip any nodes not in spaces to be updated.
+    // - While doing distance resetting, identify the space roots, set their
+    //    initial distances from their parents whose distances are not reset
+    //    (since parents must be in space 0).
+    // - If space zero is in the set then invalidate and update everything.
 
     // Uses Dijkstra's algorithm to find all of the shortest distances.
     // https://en.wikipedia.org/wiki/Dijkstra%27s_algorithm
@@ -1447,17 +1515,36 @@ struct graph_t
     // According to https://www3.cs.stonybrook.edu/~rezaul/papers/TR-07-54.pdf
     // for practical performance this is faster then using a more advanced queue
     // (such as a fibonacci queue) with a fast decrease priority.
-    unsigned count = vertices_.length;
+    
     for (unsigned i = 0; i < count; i++)
-      vertices_.arrayZ[i].distance = hb_int_max (int64_t);
-    vertices_.tail ().distance = 0;
+    {
+      auto& v = vertices_.arrayZ[i];
+      unsigned space = space_for(i);
+      
+      if (update_all) {
+        v.distance = hb_int_max (int64_t);
+        continue;
+      }
 
-    hb_priority_queue_t<int64_t> queue;
-    queue.alloc (count);
-    queue.insert (0, vertices_.length - 1);
+      if (!distance_invalid_by_space.has (space)) continue;
+
+      if (!v.is_space_root()) {
+        v.distance = hb_int_max (int64_t);
+        continue;
+      }
+
+      unsigned distance = distance_for_node(i);
+      queue.insert(distance, i);
+      v.distance = distance;
+    }
+
+    if (update_all) {
+      vertices_.tail ().distance = 0;
+      queue.insert (0, vertices_.length - 1);
+    }
 
     hb_vector_t<bool> visited;
-    visited.resize (vertices_.length);
+    visited.resize (count);
 
     while (!queue.in_error () && !queue.is_empty ())
     {
@@ -1472,10 +1559,7 @@ struct graph_t
         if (visited[link.objidx]) continue;
 
         const auto& child = vertices_.arrayZ[link.objidx].obj;
-        unsigned link_width = link.width ? link.width : 4; // treat virtual offsets as 32 bits wide
-        int64_t child_weight = (child.tail - child.head) +
-                               ((int64_t) 1 << (link_width * 8)) * (vertices_.arrayZ[link.objidx].space + 1);
-        int64_t child_distance = next_distance + child_weight;
+        int64_t child_distance = distance_for_node (next_distance, link, child);
 
         if (child_distance < vertices_.arrayZ[link.objidx].distance)
         {
@@ -1492,7 +1576,7 @@ struct graph_t
       return;
     }
 
-    distance_invalid = false;
+    distance_invalid_by_space.clear();
   }
 
  private:
@@ -1589,7 +1673,7 @@ struct graph_t
   hb_vector_t<vertex_t> vertices_scratch_;
  private:
   bool parents_invalid;
-  bool distance_invalid;
+  hb_set_t distance_invalid_by_space;
   bool positions_invalid;
   bool successful;
   hb_vector_t<unsigned> num_roots_for_space_;
