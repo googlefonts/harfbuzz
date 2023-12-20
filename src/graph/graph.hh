@@ -787,6 +787,9 @@ struct graph_t
 
     if (!roots) return false;
 
+    unsigned short_space = this->next_space();
+    num_roots_for_space_.push (0);
+
     while (roots)
     {
       uint32_t next = HB_SET_VALUE_INVALID;
@@ -812,6 +815,27 @@ struct graph_t
         // trigger full distance invalidation.
         distance_invalid_by_space.add(0);
         positions_invalid = true;
+      }
+
+      // The short space (space 1) is assigned to nodes that are not in
+      // a 32 bit space and are not an ancestor of any of the 32 bit spaces.
+      // Nodes in the short space are fully independent for distance
+      // calculations from the 32 bit spaces.
+      hb_set_t root_ancestors;
+      find_ancestors(roots, root_ancestors);
+      int root_index = (int) root_idx ();
+      for (int i = root_index; i >= 0; i--)
+      {
+        if (!root_ancestors.has(i)) continue;
+        for (auto& l : vertices_[i].obj.all_links())
+        {
+          unsigned idx = l.objidx;
+          if (root_ancestors.has(idx)) continue;
+          if (!visited.has(idx)) continue;
+
+          vertices_[idx].space = short_space;
+          num_roots_for_space_[short_space] = num_roots_for_space_[short_space] + 1;
+        }
       }
 
       // TODO(grieger): special case for GSUB/GPOS use extension promotions to move 16 bit space
@@ -1456,8 +1480,12 @@ struct graph_t
     const hb_serialize_context_t::object_t& child)
   {
     unsigned link_width = link.width ? link.width : 4; // treat virtual offsets as 32 bits wide
+
+    // nodes in space 0 and 1 get normal weight for the link, nodes
+    // in space > 1 have the link weight multiplied by the space number.
+    unsigned space_mod = hb_max(vertices_.arrayZ[link.objidx].space, 1u);
     int64_t child_weight = (child.tail - child.head) +
-      ((int64_t) 1 << (link_width * 8)) * (vertices_.arrayZ[link.objidx].space + 1);
+      ((int64_t) 1 << (link_width * 8)) * space_mod;
     return parent_distance + child_weight;
   }
 
@@ -1491,6 +1519,13 @@ struct graph_t
     if (distance_invalid_by_space.is_empty()) return;
 
     bool update_all = distance_invalid_by_space.has(0);
+
+    if (DEBUG_ENABLED(SUBSET_REPACK)) {
+      DEBUG_MSG (SUBSET_REPACK, nullptr, "Recomputing distances for:");
+      for (unsigned space : distance_invalid_by_space) {
+        DEBUG_MSG (SUBSET_REPACK, nullptr, "  space %u", space);
+      }
+    }
     
     hb_priority_queue_t<int64_t> queue;
     unsigned count = vertices_.length;
@@ -1665,6 +1700,28 @@ struct graph_t
 
     for (unsigned p : v.parents_iter ())
       find_connected_nodes (p, targets, visited, connected);
+  }
+
+  /*
+   * Finds the set of nodes which are ancestors of start_idx
+   */
+  void find_ancestors(unsigned start_idx, hb_set_t& ancestors)
+  {
+    const auto& v = vertices_[start_idx];
+    for (unsigned p : v.parents_iter ())
+    {
+      ancestors.add(p);
+      find_ancestors(p, ancestors);
+    }
+  }
+
+  /*
+   * Finds the set of nodes which are ancestors of any node in nodes
+   */
+  void find_ancestors(const hb_set_t& nodes, hb_set_t& ancestors)
+  {
+    for (unsigned node_idx : nodes)
+      find_ancestors(node_idx, ancestors);
   }
 
  public:

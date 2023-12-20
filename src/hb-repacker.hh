@@ -201,7 +201,8 @@ bool _try_isolating_subgraphs (const hb_vector_t<graph::overflow_record_t>& over
 
     unsigned root;
     unsigned overflow_space = sorted_graph.space_for (r.parent, &root);
-    if (!overflow_space) continue;
+    // Ignore space 0 and 1 which are 16 bit areas
+    if (overflow_space <= 1) continue;
     if (sorted_graph.num_roots_for_space (overflow_space) <= 1) continue;
 
     if (!space) {
@@ -436,7 +437,7 @@ template<typename T>
 inline hb_blob_t*
 hb_resolve_overflows (const T& packed,
                       hb_tag_t table_tag,
-                      unsigned max_rounds = 20,
+                      unsigned max_rounds = 32,
                       bool recalculate_extensions = false) {
   graph_t sorted_graph (packed);
   if (sorted_graph.in_error ())
