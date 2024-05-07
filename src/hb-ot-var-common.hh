@@ -29,6 +29,7 @@
 #include "hb-ot-layout-common.hh"
 #include "hb-priority-queue.hh"
 #include "hb-subset-instancer-iup.hh"
+#include <limits>
 
 
 namespace OT {
@@ -1031,7 +1032,7 @@ struct tuple_delta_t
 
   bool optimize (const contour_point_vector_t& contour_points,
                  bool is_composite,
-                 double tolerance = 0.5)
+                 double tolerance = 0.5 + 5.0 * std::numeric_limits<double>::epsilon())
   {
     unsigned count = contour_points.length;
     if (deltas_x.length != count ||
