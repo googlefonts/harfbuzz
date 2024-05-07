@@ -244,12 +244,13 @@ static bool _iup_segment (const hb_array_t<const contour_point_t> contour_points
 
       if (j == 1 && y_deltas[i] == -28 && i == 0) {
         printf("_iup_segment:\n");
-        printf("  d =  %54.50f\n", d);
-        printf("  d1 = %54.50f\n", d1);
-        printf("  d2 = %54.50f\n", d2);
-        printf("  x =  %54.50f\n", x);
-        printf("  x1 = %54.50f\n", x1);
-        printf("  x2 = %54.50f\n", x2);
+        printf("  d =     %54.50f\n", d);
+        printf("  d1 =    %54.50f\n", d1);
+        printf("  d2 =    %54.50f\n", d2);
+        printf("  x =     %54.50f\n", x);
+        printf("  x1 =    %54.50f\n", x1);
+        printf("  x2 =    %54.50f\n", x2);
+        printf("  scale = %54.50f\n", scale);
       }
 
       out[i] = d;
