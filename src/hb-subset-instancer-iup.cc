@@ -275,7 +275,7 @@ static bool _can_iup_in_between (const hb_array_t<const contour_point_t> contour
       ret = false;
 
     if (y_deltas.arrayZ[i] == -28) {
-      printf(" %s dy(int) = %d, dy(double) = %f, diff = %f\n",
+      printf(" %s dy(int) = %d, dy(double) = %54.50f, diff = %54.50f\n",
         ret ? "KEEP" : "DROP",
         y_deltas.arrayZ[i], interp_y_deltas.arrayZ[i], diff);
     }
