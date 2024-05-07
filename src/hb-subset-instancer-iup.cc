@@ -242,6 +242,16 @@ static bool _iup_segment (const hb_array_t<const contour_point_t> contour_points
       else
         d = d1 + (x - x1) * scale;
 
+      if (j == 1 && y_deltas[i] == -28 && i == 0) {
+        printf("_iup_segment:\n");
+        printf("  d =  %54.50f\n", d);
+        printf("  d1 = %54.50f\n", d1);
+        printf("  d2 = %54.50f\n", d2);
+        printf("  x =  %54.50f\n", x);
+        printf("  x1 = %54.50f\n", x1);
+        printf("  x2 = %54.50f\n", x2);
+      }
+
       out[i] = d;
     }
   }
@@ -275,8 +285,8 @@ static bool _can_iup_in_between (const hb_array_t<const contour_point_t> contour
       ret = false;
 
     if (y_deltas.arrayZ[i] == -28) {
-      printf("sizeof(double) = %lu, sizeof(float) = %lu\n", sizeof(float), sizeof(double));
-      printf(" %s dy(int) = %d, dy(double) = %54.50f, diff = %54.50f\n",
+      printf(" [%u] %s dy(int) = %d, dy(double) = %54.50f, diff = %54.50f\n",
+      i,
         ret ? "KEEP" : "DROP",
         y_deltas.arrayZ[i], interp_y_deltas.arrayZ[i], diff);
     }
