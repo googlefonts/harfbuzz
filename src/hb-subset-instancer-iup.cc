@@ -234,16 +234,24 @@ static bool _iup_segment (const hb_array_t<const contour_point_t> contour_points
     for (unsigned i = 0; i < n; i++)
     {
       double x = (j == 0 ? static_cast<double> (contour_points.arrayZ[i].x) : static_cast<double> (contour_points.arrayZ[i].y));
-      double d;
+      double d, d_0 = 0.0, d_1 = 0.0;
+
       if (x <= x1)
         d = d1;
       else if (x >= x2)
         d = d2;
-      else
-        d = d1 + (x - x1) * scale;
+      else {
+        d_0 = (x - x1);
+        _hb_memory_barrier();
+        d_1 =  d_0 * scale;
+        _hb_memory_barrier();
+        d = d1 + d_1;
+      }
 
       if (j == 1 && y_deltas[i] == -28 && i == 0) {
         printf("_iup_segment:\n");
+        printf("  d_0 =   %54.50f\n", d_0);
+        printf("  d_1 =   %54.50f\n", d_1);
         printf("  d =     %54.50f\n", d);
         printf("  d1 =    %54.50f\n", d1);
         printf("  d2 =    %54.50f\n", d2);
